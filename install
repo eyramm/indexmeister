@@ -1,190 +1,142 @@
-#! /usr/bin/env python2
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-# This script installs the files for Indexmeister and Imbrowse.in 
-# locations for a 'typical' (i.e. GNU Debian based) Linux setup.  You might
-# need to adjust it slightly for your system
-#
-
-import sys, os, subprocess, shutil, os.path, string, platform, stat
+import sys
+import os
+import subprocess
+import shutil
+import platform
+import stat
 
 def p_wrap(pstring):
-    ''' Prints a string with word-wrap to terminal column size '''
-
+    """Prints a string with word-wrap to terminal column size."""
     try:
-        a = term_cols
-    except:
-        try:
-            with os.popen("echo $COLUMNS") as b: 
-                term_cols = int(b.read())
-        except: 
-            term_cols = 40      # there aren`t that many 40-col CRTs around 
-                                # these days but terminals on mobile devices
-                                # can be pretty narrow, so this seems like a 
-                                # reasonable default 
+        term_cols = os.get_terminal_size().columns
+    except OSError:
+        term_cols = 40  # Default width for narrow screens
 
     while len(pstring) > term_cols:
-        print (pstring[:pstring[:term_cols].rfind(" ")])
+        print(pstring[:pstring[:term_cols].rfind(" ")])
         pstring = pstring[len(pstring[:pstring[:term_cols].rfind(" ")]):]
 
-    print pstring
-
+    print(pstring)
 
 def make_executable(path):
-    ''' This is from StackOverflow user Jonathon Reinhart ''' 
-
+    """Make a file executable."""
     mode = os.stat(path).st_mode
-    mode |= (mode & 0o444) >> 2    # copy R bits to X
+    mode |= (mode & 0o444) >> 2  # Copy read bits to execute
     os.chmod(path, mode)
 
+def is_installed(command):
+    """Check if a command is available on the system."""
+    try:
+        subprocess.run([command, "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        return True
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
 
-p_wrap ("Installing the Indexmeister suite.")
-p_wrap ("NOTE: If this script fails check to make sure you are Root.")
+def install_dependencies():
+    """Detect OS and install missing dependencies."""
 
+    system = platform.system().lower()
+    termux = "termux" in sys.prefix
 
-#Try to figure out what kind of system this is
+    # Check dependencies
+    missing_packages = []
 
-termux = False
-if "termux" in sys.prefix:
-    p_wrap ("I think this is an Android/Termux system. " +
-                "People who run console apps on a mobile OS " +
-                "are awesome." )
-    termux = True
+    if not is_installed("pandoc"):
+        missing_packages.append("pandoc")
+    if not is_installed("detex"):
+        missing_packages.append("texlive-extra-utils")
+    if not is_installed("aspell") and not is_installed("hunspell"):
+        missing_packages.append("aspell or hunspell")
 
-elif "win32" in sys.platform:
-    p_wrap ("This seems to be a Windows system.  I'll try to " + 
-                "install anyway, but it probably won't work. " +
-                "Consider upgrading to a modern, POSIX complient OS.")
+    if not missing_packages:
+        p_wrap("All required dependencies are installed.")
+        return True
 
-elif "linux" in sys.platform:
-    p_wrap ("This seems to be a Linux system " + "(" + string.join(platform.linux_distribution())  
-            + ").  Penguin Power!")
-    linux = True
+    p_wrap(f"Missing dependencies: {', '.join(missing_packages)}")
 
-else:
-    p_wrap ("'" + sys.platform +"' system detected. This install script " + 
-                "hasn't really been tested on your system, but let's go " +
-                "ahead and try anyway.")
+    install_cmd = []
 
-# Now see if the dependencies are present
+    if system == "linux":
+        distro = platform.linux_distribution()[0].lower() if hasattr(platform, "linux_distribution") else ""
 
-p_wrap ("Checking for some required dependencies.")
+        if "ubuntu" in distro or "debian" in distro:
+            install_cmd = ["sudo", "apt", "update", "&&", "sudo", "apt", "install", "-y"]
+            if "pandoc" in missing_packages:
+                install_cmd.append("pandoc")
+            if "texlive-extra-utils" in missing_packages:
+                install_cmd.append("texlive-extra-utils")
+            if "aspell or hunspell" in missing_packages:
+                install_cmd.append("aspell")
 
-abort_flag = False
+        elif "fedora" in distro:
+            install_cmd = ["sudo", "dnf", "install", "-y"]
+            if "pandoc" in missing_packages:
+                install_cmd.append("pandoc")
+            if "texlive-extra-utils" in missing_packages:
+                install_cmd.append("texlive-detex")
+            if "aspell or hunspell" in missing_packages:
+                install_cmd.append("aspell")
 
-try:
-    import curses
+        elif "arch" in distro:
+            install_cmd = ["sudo", "pacman", "-S", "--noconfirm"]
+            if "pandoc" in missing_packages:
+                install_cmd.append("pandoc")
+            if "texlive-extra-utils" in missing_packages:
+                install_cmd.append("texlive-bin")
+            if "aspell or hunspell" in missing_packages:
+                install_cmd.append("aspell")
 
-except:
-    p_wrap ("WARNING: The Python 'curses' library doesn't seem to be installed.  You " +
-           "won't be able to run imbrowse until you install it. The other programs " +
-           "should still work.")
-           
-'''  #Shouldn't need grep anymore
-if subprocess.call("grep hoser < /dev/null", shell=True) != 1:
-    p_wrap ("WARNING: grep doesn't seem to be installed on this system.  You " +
-           "won't be able to run imbrowse until you install it. The other programs " +
-           "should still work.")
-    if termux:  p_wrap ('On termux the command "pkg install grep" should do the trick.') 
-'''
+        elif termux:
+            install_cmd = ["pkg", "install", "-y"]
+            if "pandoc" in missing_packages:
+                install_cmd.append("pandoc")
+            if "texlive-extra-utils" in missing_packages:
+                install_cmd.append("texlive")
+            if "aspell or hunspell" in missing_packages:
+                install_cmd.append("hunspell")
 
-#aspell / hunspell
+        else:
+            p_wrap("Unsupported Linux distribution. Please install Pandoc, Detex, and Aspell manually.")
+            return False
 
-print "Checking for aspell and/or hunspell..."
-if subprocess.call("aspell list < /dev/null", 
-        shell=True) != 0 and subprocess.call(
-        "hunspell -l < /dev/null", shell=True) != 0:
-        
-    p_wrap ("I can't find aspell nor hunspell on your machine. " +
-            "unfortunately, indexmeister needs at least one of these to run.")
+    elif system == "darwin":
+        install_cmd = ["brew", "install"]
+        if "pandoc" in missing_packages:
+            install_cmd.append("pandoc")
+        if "texlive-extra-utils" in missing_packages:
+            install_cmd.append("texlive")
+        if "aspell or hunspell" in missing_packages:
+            install_cmd.append("aspell")
 
-    if termux: p_wrap ('On termux the command "pkg install hunspell" should do the trick.')
-            
-    abort_flag = True
-    
+    elif system == "windows":
+        p_wrap("Windows detected. Please install Pandoc and TeX Live manually:")
+        p_wrap("Pandoc: https://pandoc.org/installing.html")
+        p_wrap("TeX Live (for Detex): https://www.tug.org/texlive/")
+        return False
 
-#detex / pandoc
-print "Checking for pandoc and/or detex..."
-if subprocess.call("pandoc < /dev/null", 
-        shell=True) != 0 and subprocess.call("detex < /dev/null",
-        shell=True) != 0:
-
-    p_wrap ("I can't find pandoc nor detex on your machine. " +
-            "unfortunately, indexmeister needs at least one of these to run. " + 
-            "Detex is included with texlive and many other LaTex distributions. " + 
-            "Pandoc (prefered) is available as a package on most Linux distributions.")
-
-    if termux:
-        p_wrap ('On termux the easiest way to get detex is usually to install the texlive' +
-                ' package: "pkg install texlive*"') 
-            
-    abort_flag = True
-        
-          
-if abort_flag:
-    p_wrap ("Installation aborted because some required dependencies are not present.")
-    quit()
-
-# OK, now on to the actual installation
-
-# Try to find the important directories
-
-tree = [t for t in os.walk(sys.prefix)]
-
-manpath = ""
-#this works on most debian derivatives and some others
-with os.popen("manpath") as b: 
-    manpath = b.read().strip()
-    manpaths = manpath.split(os.path.pathsep)
-    for m in manpaths:
-        if os.path.exists(m+"/man1"):
-            manpath = m
-        
-#but if there's no 'manpath' just  guess
-if manpath == "":
-    manpath = sys.prefix + "/share/man/"
-
-
-if termux:
-    execpath = sys.prefix + '/bin/'
-else:
-    if os.path.exists("/usr/local/bin/"):
-        execpath = "/usr/local/bin/"
-    elif os.path.exists("/usr/bin"):
-        execpath = "/usr/bin/"
     else:
-        execpath = sys.prefix + '/bin/'
-    
+        p_wrap("Unknown OS. Please install Pandoc, Detex, and Aspell manually.")
+        return False
 
-#copy the files over
+    p_wrap(f"🚀 Installing missing dependencies: {' '.join(install_cmd)}")
+    try:
+        subprocess.run(" ".join(install_cmd), shell=True, check=True)
+        p_wrap("Installation completed successfully!")
+        return True
+    except subprocess.CalledProcessError:
+        p_wrap("Installation failed. Please install the dependencies manually.")
+        return False
 
-p_wrap("Attempting to copy executable scripts to " + execpath)
+def copy_common_words():
+    """Copy commonwords.txt to ~/.indexmeister/commonwords.txt, creating the directory if necessary."""
+    destination_dir = os.path.expanduser("~/.indexmeister")
+    os.makedirs(destination_dir, exist_ok=True)
+    shutil.copy("commonwords.txt", os.path.join(destination_dir, "commonwords.txt"))
+    p_wrap("commonwords.txt copied successfully!")
 
-try:
-    shutil.copy("./imbrowse", execpath+"imbrowse")
-    make_executable(execpath+"imbrowse")
-    shutil.copy("./indexmeister", execpath+"indexmeister")
-    make_executable(execpath+"indexmeister")
-    shutil.copy("./imhier", execpath+"imhier")
-    make_executable(execpath+"imhier")
-
-    p_wrap("Success!") 
-except:
-    p_wrap ("It lookes like something went wrong.  You will probably need" +
-            " to install the scripts by hand.")
-
-
-p_wrap("Attempting to copy man pages to " + manpath + "man1/")
-
-try:
-    shutil.copy("./indexmeister.1.gz", manpath+ "/man1/")
-    shutil.copy("./imbrowse.1.gz", manpath+ "/man1/")
-
-    p_wrap("Success!") 
-
-except:
-    p_wrap ("It lookes like something went wrong.  You will probably need" +
-            " to install the man pages by hand.")
-
-
-    
-    
+if __name__ == "__main__":
+    if install_dependencies():
+        copy_common_words()
