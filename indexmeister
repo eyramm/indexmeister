@@ -12,7 +12,7 @@ import os
 import argparse
 import re
 
-VERSION_CODE = "0.40"  # current version of indexmeister
+VERSION_CODE = "0.60"       #current version of imbrowse
 
 # Function to load common words from external file
 def load_common_words():
