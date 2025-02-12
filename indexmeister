@@ -1,9 +1,9 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-'''Utility to help index LaTeX books by suggesting possible index terms.
+"""Utility to help index LaTeX books by suggesting possible index terms.
    Copyright 2015-2018 by Kevin A. Straight <longhunt@yahoo.com> under the
-   terms of the GNU public license. Adapted for Python 3.'''   
+   terms of the GNU public license. Adapted for Python 3."""   
 
 import string
 import subprocess
@@ -28,8 +28,8 @@ def load_common_words():
     with open(common_words_file, "r", encoding="utf-8") as file:
         return set(word.strip().lower() for word in file if word.strip())
 
-# Load common words from external file
-common500 = load_common_words()
+# Load common words
+commonwords = load_common_words()
 
 # Thresholds for word frequency analysis
 w_threshold = 0.0028429284  # Normalized word frequency threshold
@@ -59,44 +59,79 @@ if not useDetex:
         subprocess.run(["pandoc", "--version"], check=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except (subprocess.CalledProcessError, FileNotFoundError):
         print("ERROR: Either 'detex' or 'pandoc' is required but not found.")
-        print("Ensure they are installed and accessible.")
         sys.exit(1)
 
 output_words = []
 
-# Read LaTeX file and remove commands, citations, and environments if '-E' is enabled
+# Read LaTeX file into raw text
 with open(filename, "r", encoding="utf-8") as rf:
     rawtex = rf.read()
 
+# If -E is enabled, manually remove LaTeX syntax before further processing
 if args.E:
-    rawtex = re.sub(r"\\\\[a-zA-Z]+\{[^}]*\}", "", rawtex)  # Remove LaTeX commands
-    rawtex = re.sub(r"~\\cite\{[^}]*\}", "", rawtex)  # Remove citations
-    rawtex = re.sub(r"\\label\{[^}]*\}", "", rawtex)  # Remove labels
-    rawtex = re.sub(r"\\begin\{[^}]*\}.*?\\end\{[^}]*\}", "", rawtex, flags=re.DOTALL)  # Remove LaTeX environments
+    # 1. Remove full-line LaTeX comments (lines starting with %)
+    rawtex = re.sub(r"^%.*$", "", rawtex, flags=re.MULTILINE)
 
-# Extract words using Detex first, then Pandoc if unavailable
-command = ["detex", filename] if useDetex else ["pandoc", "-t", "plain", filename]
-try:
-    result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    rawtext = result.stdout.strip()
-    if not rawtext:
-        print("ERROR: No text extracted. Check if the file exists and is a valid LaTeX document.")
+    # 2. Remove inline LaTeX comments (% at the end of a line)
+    rawtex = re.sub(r"%.*", "", rawtex)
+
+    # 3. Remove LaTeX commands (\command{...}, \command[...], \command)
+    rawtex = re.sub(r"\\[a-zA-Z]+\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})?", "", rawtex)
+
+    # 4. Remove \ref, \label, \cite, \input, \altText, \textit{}
+    rawtex = re.sub(r"\\(ref|label|cite|input|altText|textit)\{[^}]*\}", "", rawtex)
+
+    # 5. Remove file paths from \includegraphics
+    rawtex = re.sub(r"\\includegraphics\[[^\]]*\]\{[^}]*\}", "", rawtex)
+
+    # 6. Remove optional LaTeX arguments in square brackets (e.g., [h], [width=...])
+    rawtex = re.sub(r"\[[^\]]*\]", "", rawtex)
+
+    # 7. Remove ` `` ` and formatting characters while keeping words
+    rawtex = rawtex.replace("``", "").replace("''", "").replace("`", "")
+
+    # 8. Remove `~\ref{}` style links without keeping "~"
+    rawtex = re.sub(r"~\\(ref|cite|label|input)\{[^}]*\}", "", rawtex)
+
+    # 9. Remove `~` when used between words (e.g., "Chapter~\ref{}" → "Chapter")
+    rawtex = re.sub(r"(\b\w+)~", r"\1 ", rawtex)  # Changes "Chapter~" to "Chapter "
+
+    # 10. Remove parentheses `()`, tilde `~`, and extra punctuation
+    rawtex = re.sub(r"[~()]", " ", rawtex)  # Converts to a space to keep separation
+
+    # 11. Remove lingering braces, brackets, and excessive spaces
+    rawtex = re.sub(r"[\{\}\[\]]", "", rawtex)
+    rawtex = re.sub(r"\s{2,}", " ", rawtex).strip()
+
+    rawtext=rawtex
+
+    # print("Running E")
+    # print(rawtext)
+else:
+    # Extract text using Detex or Pandoc
+    command = ["detex", filename] if useDetex else ["pandoc", "-t", "plain", filename]
+    try:
+        result = subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rawtext = result.stdout.strip()
+        if not rawtext:
+            print("ERROR: No text extracted. Check if the file exists and is a valid LaTeX document.")
+            sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print(f"ERROR: Failed to extract text from LaTeX file. {e.stderr.strip()}")
         sys.exit(1)
-except subprocess.CalledProcessError as e:
-    print(f"ERROR: Failed to extract text from LaTeX file. {e.stderr.strip()}")
-    sys.exit(1)
 
+# Process extracted text
 rawtext = rawtext.replace("—", "; ").replace("–", ": ").replace("’", "").split()
 
-# Identify unique words and phrases, including capitalized words
+# Identify unique words
 for i in range(len(rawtext)):
-    phrase = rawtext[i].strip(".;:,-""!?')\"()&")  # Remove unwanted characters
+    phrase = rawtext[i].strip(".;:,-!?')\"()&")  # Remove unwanted characters
     if phrase.endswith("'s"):
         phrase = phrase[:-2]
-    if phrase and phrase.lower() not in common500 and phrase not in output_words:
+    if phrase and phrase.lower() not in commonwords and phrase not in output_words:
         output_words.append(phrase)
 
-# Use spell-checker if '-d' is in options
+# Use spell-checker if '-d' is enabled
 if args.d:
     try:
         checker = f"detex {filename} | aspell list" if useDetex else f"pandoc -t plain {filename} | aspell list"
@@ -105,12 +140,12 @@ if args.d:
     except subprocess.CalledProcessError:
         pass
 
-# Identify words occurring more frequently than expected if '-f' is in options
+# Identify high-frequency words if '-f' is enabled
 if args.f:
     wordcounts = {}
     for w in rawtext:
         w_clean = "".join([c for c in w if c not in string.punctuation]).lower()
-        if w_clean and w_clean not in common500:
+        if w_clean and w_clean not in commonwords:
             wordcounts[w_clean] = wordcounts.get(w_clean, 0) + 1
     
     max_freq = max(wordcounts.values()) if wordcounts else 1
@@ -120,7 +155,7 @@ if args.f:
             if cleaned_word not in output_words:
                 output_words.append(cleaned_word)
 
-# Output sorted unique words excluding common stop words
+# Output sorted unique words
 output_words = sorted(set(output_words))
 for word in output_words:
     print(word)
